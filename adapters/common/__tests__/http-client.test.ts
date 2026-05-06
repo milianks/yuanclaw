@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { AdapterHttpClient } from '../http-client.js'
 
 describe('AdapterHttpClient', () => {
@@ -53,6 +56,45 @@ describe('AdapterHttpClient', () => {
     expect(projects[0].projectName).toBe('my-app')
   })
 
+  it('matchProject accepts an absolute local project path inside an allowed root without recent history', async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-root-'))
+    const projectDir = fs.mkdtempSync(path.join(rootDir, 'project-'))
+    try {
+      client = new AdapterHttpClient('ws://127.0.0.1:3456', { allowedProjectRoots: [rootDir] })
+      globalThis.fetch = mock(() => {
+        throw new Error('recent projects should not be queried for absolute paths')
+      }) as any
+
+      const result = await client.matchProject(projectDir)
+
+      expect(result.project?.realPath).toBe(fs.realpathSync(projectDir))
+      expect(result.project?.projectName).toBe(path.basename(projectDir))
+      expect((globalThis.fetch as any).mock.calls).toHaveLength(0)
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('matchProject rejects absolute local project paths outside allowed roots', async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-root-'))
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-project-'))
+    try {
+      client = new AdapterHttpClient('ws://127.0.0.1:3456', { allowedProjectRoots: [rootDir] })
+      globalThis.fetch = mock(() => {
+        throw new Error('recent projects should not be queried for rejected absolute paths')
+      }) as any
+
+      const result = await client.matchProject(projectDir)
+
+      expect(result.project).toBeUndefined()
+      expect(result.ambiguous).toBeUndefined()
+      expect((globalThis.fetch as any).mock.calls).toHaveLength(0)
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true })
+      fs.rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
   it('createSession throws on server error', async () => {
     globalThis.fetch = mock(() =>
       Promise.resolve(new Response(JSON.stringify({ error: 'BAD_REQUEST', message: 'workDir required' }), {
@@ -68,8 +110,8 @@ describe('AdapterHttpClient', () => {
     globalThis.fetch = mock(() =>
       Promise.resolve(new Response(JSON.stringify({
         branch: 'main',
-        repoName: 'claude-code-haha',
-        workDir: '/repo/claude-code-haha',
+        repoName: 'yuanclaw',
+        workDir: '/repo/yuanclaw',
         changedFiles: 2,
       }), {
         headers: { 'Content-Type': 'application/json' },
@@ -77,7 +119,7 @@ describe('AdapterHttpClient', () => {
     ) as any
 
     const gitInfo = await client.getGitInfo('session-123')
-    expect(gitInfo.repoName).toBe('claude-code-haha')
+    expect(gitInfo.repoName).toBe('yuanclaw')
     expect((globalThis.fetch as any).mock.calls[0][0]).toBe(
       'http://127.0.0.1:3456/api/sessions/session-123/git-info',
     )

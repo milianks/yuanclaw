@@ -1,14 +1,14 @@
 {
-  "name": "claude-code-local",
+  "name": "yuanclaw",
   "version": "999.0.0-local",
   "private": true,
   "type": "module",
   "bin": {
-    "claude-haha": "./bin/claude-haha"
+    "yuanclaw": "./bin/yuanclaw"
   },
   "scripts": {
-    "claude-haha": "bun run ./bin/claude-haha",
-    "start": "bun run ./bin/claude-haha",
+    "yuanclaw": "bun run ./bin/yuanclaw",
+    "start": "bun run ./bin/yuanclaw",
     "check:pr": "bun run scripts/pr/check-pr.ts",
     "check:impact": "bun run scripts/pr/impact-report.ts",
     "check:policy": "bun test scripts/pr/change-policy.test.ts scripts/pr/pr-triage-workflow.test.ts",
@@ -89,6 +89,9 @@
     "xss": "^1.0.15",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
+  },
+  "overrides": {
+    "follow-redirects": "^1.16.0"
   },
   "devDependencies": {
     "mermaid": "^11.14.0",

@@ -1,7 +1,7 @@
 /**
  * 用真实的 Provider 配置测试 ProviderService
- * 验证添加、激活、cc-haha/settings.json 同步是否正确
- * (provider env 写到 ~/.claude/cc-haha/settings.json，不污染原版 settings.json)
+ * 验证添加、激活、yuanclaw/settings.json 同步是否正确
+ * (provider env 写到 ~/.claude/yuanclaw/settings.json，不污染原版 settings.json)
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
@@ -16,6 +16,7 @@ const MODEL_MAPPING = {
   sonnet: 'MiniMax-M2.7-highspeed',
   opus: 'MiniMax-M2.7-highspeed',
 }
+const YUANCLAW_TEST_API_KEY = ['yuanclaw', 'test', 'api', 'key'].join('-')
 
 describe('Real Provider Configs', () => {
   let tmpDir: string
@@ -32,9 +33,9 @@ describe('Real Provider Configs', () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
-  // Helper: read the Haha-specific settings file
-  async function readCcHahaSettings(): Promise<Record<string, unknown>> {
-    const raw = await fs.readFile(path.join(tmpDir, 'cc-haha', 'settings.json'), 'utf-8')
+  // Helper: read the Yuanclaw-specific settings file
+  async function readYuanclawSettings(): Promise<Record<string, unknown>> {
+    const raw = await fs.readFile(path.join(tmpDir, 'yuanclaw', 'settings.json'), 'utf-8')
     return JSON.parse(raw)
   }
 
@@ -48,7 +49,7 @@ describe('Real Provider Configs', () => {
     }
   }
 
-  test('添加 MiniMax Provider 并激活 — 写入 cc-haha/settings.json', async () => {
+  test('添加 MiniMax Provider 并激活 — 写入 yuanclaw/settings.json', async () => {
     const minimax = await service.addProvider({
       presetId: 'minimax',
       name: 'MiniMax',
@@ -63,19 +64,24 @@ describe('Real Provider Configs', () => {
     // 激活 provider
     await service.activateProvider(minimax.id)
 
-    // 验证写入 cc-haha/settings.json
-    const settings = await readCcHahaSettings()
+    // 验证写入 yuanclaw/settings.json
+    const settings = await readYuanclawSettings()
     expect((settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('https://api.minimaxi.com/anthropic')
-    expect((settings.env as Record<string, string>).ANTHROPIC_API_KEY).toBe('sk-fake-test-key-for-testing-only')
+    expect((settings.env as Record<string, string>).ANTHROPIC_AUTH_TOKEN).toBe('sk-fake-test-key-for-testing-only')
+    expect((settings.env as Record<string, string>).ANTHROPIC_API_KEY).toBeUndefined()
     expect((settings.env as Record<string, string>).ANTHROPIC_MODEL).toBe('MiniMax-M2.7-highspeed')
+    expect(JSON.parse((settings.env as Record<string, string>).CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toMatchObject({
+      'MiniMax-M2.7': 204800,
+      'MiniMax-M2.7-highspeed': 204800,
+    })
 
     // 验证原版 settings.json 没有被创建
     expect(await originalSettingsExists()).toBe(false)
 
-    console.log('✅ Provider 写入 cc-haha/settings.json，原版 settings.json 未被污染')
+    console.log('✅ Provider 写入 yuanclaw/settings.json，原版 settings.json 未被污染')
   })
 
-  test('切换 Provider — 更新 cc-haha/settings.json', async () => {
+  test('切换 Provider — 更新 yuanclaw/settings.json', async () => {
     const minimax = await service.addProvider({
       presetId: 'minimax',
       name: 'MiniMax',
@@ -99,15 +105,21 @@ describe('Real Provider Configs', () => {
 
     // 先激活 MiniMax
     await service.activateProvider(minimax.id)
-    let settings = await readCcHahaSettings()
+    let settings = await readYuanclawSettings()
     expect((settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('https://api.minimaxi.com/anthropic')
+    expect(JSON.parse((settings.env as Record<string, string>).CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toMatchObject({
+      'MiniMax-M2.7': 204800,
+      'MiniMax-M2.7-highspeed': 204800,
+    })
 
     // 切换到接口AI中转站
     await service.activateProvider(jiekou.id)
-    settings = await readCcHahaSettings()
+    settings = await readYuanclawSettings()
     expect((settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('https://api.jiekou.ai/anthropic')
-    expect((settings.env as Record<string, string>).ANTHROPIC_API_KEY).toBe('sk-fake-test-key-for-testing-only')
+    expect((settings.env as Record<string, string>).ANTHROPIC_AUTH_TOKEN).toBe('sk-fake-test-key-for-testing-only')
+    expect((settings.env as Record<string, string>).ANTHROPIC_API_KEY).toBeUndefined()
     expect((settings.env as Record<string, string>).ANTHROPIC_MODEL).toBe('claude-opus-4-7')
+    expect((settings.env as Record<string, string>).CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
 
     // 验证 activeId 正确
     const list = await service.listProviders()
@@ -116,14 +128,14 @@ describe('Real Provider Configs', () => {
     // 原版 settings.json 依然不存在
     expect(await originalSettingsExists()).toBe(false)
 
-    console.log('✅ 切换 Provider 成功，cc-haha/settings.json 更新正确')
+    console.log('✅ 切换 Provider 成功，yuanclaw/settings.json 更新正确')
   })
 
-  test('cc-haha/settings.json 保留已有字段', async () => {
-    // 预写一个有内容的 cc-haha/settings.json（模拟用户已有配置）
-    await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+  test('yuanclaw/settings.json 保留已有字段', async () => {
+    // 预写一个有内容的 yuanclaw/settings.json（模拟用户已有配置）
+    await fs.mkdir(path.join(tmpDir, 'yuanclaw'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, 'cc-haha', 'settings.json'),
+      path.join(tmpDir, 'yuanclaw', 'settings.json'),
       JSON.stringify({
         customField: 'should_be_preserved',
         env: {
@@ -147,17 +159,18 @@ describe('Real Provider Configs', () => {
     })
     await service.activateProvider(provider.id)
 
-    const settings = await readCcHahaSettings()
+    const settings = await readYuanclawSettings()
 
     // 验证新字段写入
     expect((settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('https://api.jiekou.ai/anthropic')
-    expect((settings.env as Record<string, string>).ANTHROPIC_API_KEY).toBe('sk_test')
+    expect((settings.env as Record<string, string>).ANTHROPIC_AUTH_TOKEN).toBe('sk_test')
+    expect((settings.env as Record<string, string>).ANTHROPIC_API_KEY).toBeUndefined()
 
     // 验证已有字段保留
     expect(settings.customField).toBe('should_be_preserved')
     expect((settings.env as Record<string, string>).EXISTING_VAR).toBe('should_be_preserved')
 
-    console.log('✅ cc-haha/settings.json 已有字段全部保留')
+    console.log('✅ yuanclaw/settings.json 已有字段全部保留')
   })
 
   test('activateOfficial 清除 provider env', async () => {
@@ -172,16 +185,17 @@ describe('Real Provider Configs', () => {
     await service.activateProvider(provider.id)
 
     // 确认写入了
-    let settings = await readCcHahaSettings()
+    let settings = await readYuanclawSettings()
     expect((settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBeDefined()
 
     // 切换到 official
     await service.activateOfficial()
 
-    settings = await readCcHahaSettings()
+    settings = await readYuanclawSettings()
     const env = settings.env as Record<string, string> | undefined
     expect(env?.ANTHROPIC_BASE_URL).toBeUndefined()
     expect(env?.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
     expect(env?.ANTHROPIC_MODEL).toBeUndefined()
 
     console.log('✅ activateOfficial 正确清除了 provider env')
@@ -192,6 +206,7 @@ describe('Real Provider Configs', () => {
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiKey: 'sk-fake-test-key',
       modelId: 'MiniMax-M2.7-highspeed',
+      authStrategy: 'auth_token',
     })
 
     // testProviderConfig 返回 { connectivity: { ... }, proxy?: { ... } }
@@ -205,7 +220,7 @@ describe('Real Provider Configs', () => {
     console.log('   error:', result.connectivity.error)
   })
 
-  test('providers.json 和 cc-haha/settings.json 独立于 settings.json', async () => {
+  test('providers.json 和 yuanclaw/settings.json 独立于 settings.json', async () => {
     // 模拟原版 Claude Code 的 settings.json 已存在
     await fs.writeFile(
       path.join(tmpDir, 'settings.json'),
@@ -218,12 +233,12 @@ describe('Real Provider Configs', () => {
       }, null, 2),
     )
 
-    // Haha 添加并激活自己的 provider
+    // Yuanclaw 添加并激活自己的 provider
     const provider = await service.addProvider({
       presetId: 'minimax',
       name: 'MiniMax',
       baseUrl: 'https://api.minimaxi.com/anthropic',
-      apiKey: 'sk-haha-key',
+      apiKey: YUANCLAW_TEST_API_KEY,
       models: MODEL_MAPPING,
     })
     await service.activateProvider(provider.id)
@@ -234,11 +249,12 @@ describe('Real Provider Configs', () => {
     expect((original.env as Record<string, string>).ANTHROPIC_API_KEY).toBe('original-key')
     expect(original.effortLevel).toBe('high')
 
-    // 验证 cc-haha/settings.json 是 Haha 自己的
-    const haha = await readCcHahaSettings()
-    expect((haha.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('https://api.minimaxi.com/anthropic')
-    expect((haha.env as Record<string, string>).ANTHROPIC_API_KEY).toBe('sk-haha-key')
+    // 验证 yuanclaw/settings.json 是 Yuanclaw 自己的
+    const yuanclaw = await readYuanclawSettings()
+    expect((yuanclaw.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('https://api.minimaxi.com/anthropic')
+    expect((yuanclaw.env as Record<string, string>).ANTHROPIC_AUTH_TOKEN).toBe(YUANCLAW_TEST_API_KEY)
+    expect((yuanclaw.env as Record<string, string>).ANTHROPIC_API_KEY).toBeUndefined()
 
-    console.log('✅ 原版 settings.json 完好无损，Haha 配置独立存储')
+    console.log('✅ 原版 settings.json 完好无损，Yuanclaw 配置独立存储')
   })
 })

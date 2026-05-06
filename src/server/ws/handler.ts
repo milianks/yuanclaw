@@ -81,8 +81,9 @@ export type WebSocketData = {
   serverHost: string
 }
 
-// Active WebSocket sessions
-const activeSessions = new Map<string, ServerWebSocket<WebSocketData>>()
+// Active WebSocket clients keyed by session. A gateway session can have
+// multiple clients attached at once (REST observers, browser tabs, IM bridges).
+const activeSessions = new Map<string, Set<ServerWebSocket<WebSocketData>>>()
 
 export const handleWebSocket = {
   open(ws: ServerWebSocket<WebSocketData>) {
@@ -109,11 +110,11 @@ export const handleWebSocket = {
       sessionCleanupTimers.delete(sessionId)
     }
 
-    activeSessions.set(sessionId, ws)
+    addActiveClient(sessionId, ws)
     if (prewarmedSessions.has(sessionId)) {
       bindPrewarmMetadataCapture(sessionId)
     } else {
-      rebindSessionOutput(sessionId, ws)
+      rebindSessionOutput(sessionId)
     }
 
     const msg: ServerMessage = { type: 'connected', sessionId }
@@ -193,14 +194,13 @@ export const handleWebSocket = {
 
     console.log(`[WS] Client disconnected from session: ${sessionId} (${code}: ${reason})`)
     computerUseApprovalService.cancelSession(sessionId)
-    activeSessions.delete(sessionId)
-    conversationService.clearOutputCallbacks(sessionId)
+    removeActiveClient(sessionId, ws)
 
     // Schedule delayed cleanup: if the client doesn't reconnect within 30 seconds,
     // stop the CLI subprocess to avoid leaking resources.
     const cleanupTimer = setTimeout(() => {
       sessionCleanupTimers.delete(sessionId)
-      if (!activeSessions.has(sessionId)) {
+      if (!hasActiveClients(sessionId)) {
         console.log(`[WS] Session ${sessionId} not reconnected after 30s, stopping CLI subprocess`)
         conversationService.stopSession(sessionId)
         cleanupSessionRuntimeState(sessionId)
@@ -312,7 +312,7 @@ async function handleUserMessage(
   // any pre-turn SDK chatter as fresh chat history.
   let userMessageSent = false
 
-  rebindSessionOutput(sessionId, ws, {
+  rebindSessionOutput(sessionId, {
     shouldForward: (cliMsg) => userMessageSent || (cliMsg.type === 'result' && cliMsg.is_error),
   })
 
@@ -619,7 +619,7 @@ function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
 // Title generation
 // ============================================================================
 
-function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: string): void {
+function triggerTitleGeneration(sessionId: string): void {
   const state = sessionTitleState.get(sessionId)
   if (!state || state.hasCustomTitle) return
 
@@ -645,7 +645,7 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
             state.hasCustomTitle = true
             return
           }
-          sendMessage(ws, { type: 'session_title_updated', sessionId, title: placeholder })
+          broadcastToSession(sessionId, { type: 'session_title_updated', sessionId, title: placeholder })
         }
       }
 
@@ -657,7 +657,7 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
           state.hasCustomTitle = true
           return
         }
-        sendMessage(ws, { type: 'session_title_updated', sessionId, title: aiTitle })
+        broadcastToSession(sessionId, { type: 'session_title_updated', sessionId, title: aiTitle })
       }
     } catch (err) {
       console.error(`[Title] Failed to generate title for ${sessionId}:`, err)
@@ -680,6 +680,10 @@ type SessionStreamState = {
   /** Tool blocks whose input JSON failed to parse in content_block_stop.
    *  The assistant message carries the complete input — defer to that. */
   pendingToolBlocks: Map<string, { toolName: string; toolUseId: string; parentToolUseId?: string }>
+  lastApiError?: {
+    message: string
+    code: string
+  }
 }
 
 const sessionStreamStates = new Map<string, SessionStreamState>()
@@ -692,6 +696,7 @@ function getStreamState(sessionId: string): SessionStreamState {
       activeBlockTypes: new Map(),
       activeToolBlocks: new Map(),
       pendingToolBlocks: new Map(),
+      lastApiError: undefined,
     }
     sessionStreamStates.set(sessionId, state)
   }
@@ -715,7 +720,7 @@ function cleanupSessionRuntimeState(sessionId: string) {
 }
 
 function getPrewarmIdleTimeoutMs(): number {
-  const raw = process.env.CC_HAHA_PREWARM_IDLE_TIMEOUT_MS
+  const raw = process.env.YUANCLAW_PREWARM_IDLE_TIMEOUT_MS
   if (!raw) return DEFAULT_PREWARM_IDLE_TIMEOUT_MS
   const parsed = Number.parseInt(raw, 10)
   return Number.isFinite(parsed) && parsed >= 0
@@ -759,6 +764,31 @@ function cacheSessionInitMetadata(sessionId: string, cliMsg: any) {
       description: typeof cmd === 'string' ? '' : (cmd.description || ''),
     })))
   }
+}
+
+function extractAssistantText(cliMsg: any): string {
+  const content = cliMsg?.message?.content
+  if (!Array.isArray(content)) return ''
+  const textBlock = content.find(
+    (block: unknown): block is { type: string; text: string } =>
+      !!block &&
+      typeof block === 'object' &&
+      (block as { type?: unknown }).type === 'text' &&
+      typeof (block as { text?: unknown }).text === 'string',
+  )
+  return textBlock?.text || ''
+}
+
+function isDuplicateOfLastApiError(
+  lastApiError: SessionStreamState['lastApiError'],
+  resultMessage: string,
+): boolean {
+  if (!lastApiError?.message) return false
+  if (resultMessage === lastApiError.message) return true
+  return (
+    resultMessage.includes(lastApiError.message) &&
+    /CLI (?:process exited unexpectedly|exited during startup)/i.test(resultMessage)
+  )
 }
 
 function bindPrewarmMetadataCapture(sessionId: string) {
@@ -831,11 +861,14 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
   const streamState = getStreamState(sessionId)
   switch (cliMsg.type) {
     case 'assistant': {
-      if (cliMsg.error) {
+      if (cliMsg.error || cliMsg.isApiErrorMessage) {
+        const message = extractAssistantText(cliMsg) || cliMsg.error || 'Unknown API error'
+        const code = typeof cliMsg.error === 'string' ? cliMsg.error : 'API_ERROR'
+        streamState.lastApiError = { message, code }
         return [{
           type: 'error',
-          message: cliMsg.message?.content?.[0]?.text || cliMsg.error,
-          code: cliMsg.error,
+          message,
+          code,
         }]
       }
 
@@ -1078,6 +1111,10 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
           (Array.isArray(cliMsg.errors) && cliMsg.errors.length > 0
             ? cliMsg.errors.join('\n')
             : 'Unknown error')
+        if (isDuplicateOfLastApiError(streamState.lastApiError, resultMessage)) {
+          streamState.lastApiError = undefined
+          return [{ type: 'message_complete', usage }]
+        }
         // 错误和完成消息都发送
         return [
           {
@@ -1091,6 +1128,7 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
 
       // Clear stop flag on successful completion too
       sessionStopRequested.delete(sessionId)
+      streamState.lastApiError = undefined
       return [{ type: 'message_complete', usage }]
     }
 
@@ -1195,6 +1233,34 @@ function sendError(ws: ServerWebSocket<WebSocketData>, message: string, code: st
   sendMessage(ws, { type: 'error', message, code })
 }
 
+function addActiveClient(sessionId: string, ws: ServerWebSocket<WebSocketData>) {
+  const clients = activeSessions.get(sessionId) ?? new Set<ServerWebSocket<WebSocketData>>()
+  clients.add(ws)
+  activeSessions.set(sessionId, clients)
+}
+
+function removeActiveClient(sessionId: string, ws: ServerWebSocket<WebSocketData>) {
+  const clients = activeSessions.get(sessionId)
+  if (!clients) return
+  clients.delete(ws)
+  if (clients.size === 0) {
+    activeSessions.delete(sessionId)
+  }
+}
+
+function hasActiveClients(sessionId: string): boolean {
+  return (activeSessions.get(sessionId)?.size ?? 0) > 0
+}
+
+function broadcastToSession(sessionId: string, message: ServerMessage): boolean {
+  const clients = activeSessions.get(sessionId)
+  if (!clients || clients.size === 0) return false
+  for (const client of clients) {
+    sendMessage(client, message)
+  }
+  return true
+}
+
 function getDesktopSlashCommand(content: string): ReturnType<typeof parseSlashCommand> {
   const parsed = parseSlashCommand(content.trim())
   if (!parsed || parsed.isMcp) return null
@@ -1250,7 +1316,6 @@ function getCompactBoundaryMessage(cliMsg: any): string {
 
 function rebindSessionOutput(
   sessionId: string,
-  ws: ServerWebSocket<WebSocketData>,
   options?: {
     shouldForward?: (cliMsg: any) => boolean
   },
@@ -1265,11 +1330,11 @@ function rebindSessionOutput(
 
     const serverMsgs = translateCliMessage(cliMsg, sessionId)
     for (const msg of serverMsgs) {
-      sendMessage(ws, msg)
+      broadcastToSession(sessionId, msg)
     }
 
     if (cliMsg.type === 'result') {
-      triggerTitleGeneration(ws, sessionId)
+      triggerTitleGeneration(sessionId)
     }
   })
 }
@@ -1343,7 +1408,7 @@ async function getDefaultRuntimeSettings(): Promise<RuntimeSettings> {
 
   let model: string | undefined
   if (resolvedActiveId) {
-    // Provider is active — only consult provider-managed cc-haha settings.
+    // Provider is active — only consult provider-managed yuanclaw settings.
     // Global ~/.claude/settings.json model values must not bleed into provider mode.
     const baseModel =
       typeof modelSettings.model === 'string' && modelSettings.model.trim()
@@ -1446,10 +1511,7 @@ function enqueueRuntimeTransition(
  * Send a message to a specific session's WebSocket (for use by services)
  */
 export function sendToSession(sessionId: string, message: ServerMessage): boolean {
-  const ws = activeSessions.get(sessionId)
-  if (!ws) return false
-  ws.send(JSON.stringify(message))
-  return true
+  return broadcastToSession(sessionId, message)
 }
 
 export function getActiveSessionIds(): string[] {
