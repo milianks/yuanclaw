@@ -372,6 +372,19 @@ function StatCard({ label, value, icon }: { label: string; value: number; icon: 
   )
 }
 
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-center"
+    >
+      <div className="h-7 w-7 animate-spin rounded-full border-2 border-[var(--color-brand)] border-t-transparent" />
+      <div className="text-sm font-medium text-[var(--color-text-secondary)]">{label}</div>
+    </div>
+  )
+}
+
 function ServerRow({
   server,
   isBusy,
@@ -440,6 +453,7 @@ export function McpSettings() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [busyServerKey, setBusyServerKey] = useState<string | null>(null)
   const [pendingDeleteServer, setPendingDeleteServer] = useState<McpServerRecord | null>(null)
+  const [isInitialLoading, setIsInitialLoading] = useState(true)
   const projectPathsForFetchRef = useRef<string[] | undefined>(undefined)
   const refreshInFlightRef = useRef(new Set<string>())
 
@@ -449,16 +463,18 @@ export function McpSettings() {
 
   useEffect(() => {
     let cancelled = false
+    setIsInitialLoading(true)
 
-    Promise.all([
-      sessionsApi.getRecentProjects()
-        .then(({ projects }) => projects.map((project) => project.realPath))
-        .catch(() => []),
-      mcpApi.projectPaths()
-        .then(({ projectPaths }) => projectPaths)
-        .catch(() => []),
-    ])
-      .then(([recentProjectPaths, privateMcpProjectPaths]) => {
+    const loadServers = async () => {
+      try {
+        const [recentProjectPaths, privateMcpProjectPaths] = await Promise.all([
+          sessionsApi.getRecentProjects()
+            .then(({ projects }) => projects.map((project) => project.realPath))
+            .catch(() => []),
+          mcpApi.projectPaths()
+            .then(({ projectPaths }) => projectPaths)
+            .catch(() => []),
+        ])
         if (cancelled) return
         const paths = [
           currentWorkDir,
@@ -467,8 +483,13 @@ export function McpSettings() {
         ].filter((path): path is string => !!path)
         const projectPathsForFetch = Array.from(new Set(paths))
         projectPathsForFetchRef.current = projectPathsForFetch.length ? projectPathsForFetch : undefined
-        void fetchServers(projectPathsForFetchRef.current, currentWorkDir)
-      })
+        await fetchServers(projectPathsForFetchRef.current, currentWorkDir)
+      } finally {
+        if (!cancelled) setIsInitialLoading(false)
+      }
+    }
+
+    void loadServers()
 
     return () => {
       cancelled = true
@@ -489,6 +510,7 @@ export function McpSettings() {
     connected: servers.filter((server) => server.status === 'connected').length,
     attention: servers.filter((server) => server.status === 'failed' || server.status === 'needs-auth').length,
   }), [servers])
+  const showListLoading = isInitialLoading || (isLoading && servers.length === 0)
 
   const beginCreate = () => {
     setDraft(createEmptyDraft())
@@ -1061,64 +1083,66 @@ export function McpSettings() {
         </Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3 mb-8">
-        <StatCard label={t('settings.mcp.stats.total')} value={stats.total} icon="dns" />
-        <StatCard label={t('settings.mcp.stats.connected')} value={stats.connected} icon="check_circle" />
-        <StatCard label={t('settings.mcp.stats.attention')} value={stats.attention} icon="error" />
-      </div>
-
-      {isLoading && servers.length === 0 ? (
-        <div className="flex justify-center py-16">
-          <div className="animate-spin h-6 w-6 rounded-full border-2 border-[var(--color-brand)] border-t-transparent" />
-        </div>
-      ) : error ? (
-        <div className="text-center py-16 rounded-2xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-          <span className="material-symbols-outlined text-[40px] text-[var(--color-error)] mb-3 block">error</span>
-          <p className="text-sm text-[var(--color-error)] mb-3">{error}</p>
-          <button
-            type="button"
-            onClick={() => void fetchServers(projectPathsForFetchRef.current, currentWorkDir)}
-            className="text-sm text-[var(--color-text-accent)] hover:underline"
-          >
-            {t('common.retry')}
-          </button>
-        </div>
-      ) : servers.length === 0 ? (
-        <div className="text-center py-16 rounded-2xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-          <span className="material-symbols-outlined text-[40px] text-[var(--color-text-tertiary)] mb-3 block">dns</span>
-          <p className="text-sm text-[var(--color-text-secondary)] mb-1">{t('settings.mcp.empty')}</p>
-          <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.mcp.emptyHint')}</p>
-        </div>
+      {showListLoading ? (
+        <LoadingState label={t('common.loading')} />
       ) : (
-        <div className="flex flex-col gap-6">
-          {MCP_GROUP_ORDER.map((group) => {
-            const groupServers = groupedServers[group]
-            if (!groupServers?.length) return null
+        <>
+          <div className="grid gap-4 md:grid-cols-3 mb-8">
+            <StatCard label={t('settings.mcp.stats.total')} value={stats.total} icon="dns" />
+            <StatCard label={t('settings.mcp.stats.connected')} value={stats.connected} icon="check_circle" />
+            <StatCard label={t('settings.mcp.stats.attention')} value={stats.attention} icon="error" />
+          </div>
 
-            return (
-              <section key={group}>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="text-[1.35rem] font-semibold text-[var(--color-text-primary)]">
-                    {group === 'plugin' ? t('settings.mcp.scope.plugin') : t(`settings.mcp.scope.${group}`)}
-                  </div>
-                  <div className="text-sm text-[var(--color-text-tertiary)]">{groupServers.length}</div>
-                </div>
-                <div className="rounded-[28px] border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
-                  {groupServers.map((server) => (
-                    <ServerRow
-                      key={getServerIdentityKey(server)}
-                      server={server}
-                      isBusy={busyServerKey === getServerIdentityKey(server)}
-                      onOpen={() => beginEdit(server)}
-                      onToggle={() => void handleToggle(server)}
-                      t={t}
-                    />
-                  ))}
-                </div>
-              </section>
-            )
-          })}
-        </div>
+          {error ? (
+            <div className="text-center py-16 rounded-2xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
+              <span className="material-symbols-outlined text-[40px] text-[var(--color-error)] mb-3 block">error</span>
+              <p className="text-sm text-[var(--color-error)] mb-3">{error}</p>
+              <button
+                type="button"
+                onClick={() => void fetchServers(projectPathsForFetchRef.current, currentWorkDir)}
+                className="text-sm text-[var(--color-text-accent)] hover:underline"
+              >
+                {t('common.retry')}
+              </button>
+            </div>
+          ) : servers.length === 0 ? (
+            <div className="text-center py-16 rounded-2xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
+              <span className="material-symbols-outlined text-[40px] text-[var(--color-text-tertiary)] mb-3 block">dns</span>
+              <p className="text-sm text-[var(--color-text-secondary)] mb-1">{t('settings.mcp.empty')}</p>
+              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.mcp.emptyHint')}</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-6">
+              {MCP_GROUP_ORDER.map((group) => {
+                const groupServers = groupedServers[group]
+                if (!groupServers?.length) return null
+
+                return (
+                  <section key={group}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-[1.35rem] font-semibold text-[var(--color-text-primary)]">
+                        {group === 'plugin' ? t('settings.mcp.scope.plugin') : t(`settings.mcp.scope.${group}`)}
+                      </div>
+                      <div className="text-sm text-[var(--color-text-tertiary)]">{groupServers.length}</div>
+                    </div>
+                    <div className="rounded-[28px] border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
+                      {groupServers.map((server) => (
+                        <ServerRow
+                          key={getServerIdentityKey(server)}
+                          server={server}
+                          isBusy={busyServerKey === getServerIdentityKey(server)}
+                          onOpen={() => beginEdit(server)}
+                          onToggle={() => void handleToggle(server)}
+                          t={t}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                )
+              })}
+            </div>
+          )}
+        </>
       )}
       {deleteModal}
     </div>

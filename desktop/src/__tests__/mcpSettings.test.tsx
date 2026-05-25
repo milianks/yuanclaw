@@ -31,6 +31,14 @@ vi.mock('../api/mcp', async (importOriginal) => {
   }
 })
 
+async function renderLoadedMcpSettings() {
+  const result = render(<McpSettings />)
+  await waitFor(() => {
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+  return result
+}
+
 describe('McpSettings', () => {
   beforeEach(() => {
     vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({
@@ -77,7 +85,7 @@ describe('McpSettings', () => {
       selectedServer: null,
       isLoading: false,
       error: null,
-      fetchServers: vi.fn(),
+      fetchServers: vi.fn().mockResolvedValue(undefined),
       createServer: vi.fn(),
       updateServer: vi.fn(),
       deleteServer: vi.fn(),
@@ -89,7 +97,7 @@ describe('McpSettings', () => {
   })
 
   it('loads MCP servers for the active and recent projects on mount', async () => {
-    const fetchServers = vi.fn()
+    const fetchServers = vi.fn().mockResolvedValue(undefined)
     useMcpStore.setState({ fetchServers })
 
     render(<McpSettings />)
@@ -102,15 +110,41 @@ describe('McpSettings', () => {
     })
   })
 
-  it('renders the empty state and add button', () => {
+  it('shows a loading state before project MCP paths and servers finish loading', async () => {
+    let resolveRecentProjects!: (value: Awaited<ReturnType<typeof sessionsApi.getRecentProjects>>) => void
+    const fetchServers = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(sessionsApi.getRecentProjects).mockImplementation(() => new Promise((resolve) => {
+      resolveRecentProjects = resolve
+    }))
+    useMcpStore.setState({ fetchServers })
+
     render(<McpSettings />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading...')
+    expect(screen.queryByText('No MCP servers configured yet')).not.toBeInTheDocument()
+    expect(screen.queryByText('Total servers')).not.toBeInTheDocument()
+
+    await act(async () => {
+      resolveRecentProjects({ projects: [] })
+    })
+
+    await waitFor(() => {
+      expect(fetchServers).toHaveBeenCalledWith(['/workspace/project', '/workspace/config-project'], '/workspace/project')
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
+  })
+
+  it('renders the empty state and add button', async () => {
+    await renderLoadedMcpSettings()
 
     expect(screen.getByText('MCP servers')).toBeInTheDocument()
     expect(screen.getByText('No MCP servers configured yet')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /add server/i })).toBeInTheDocument()
   })
 
-  it('shows plugin and user MCP servers in grouped sections', () => {
+  it('shows plugin and user MCP servers in grouped sections', async () => {
     useMcpStore.setState({
       servers: [
         {
@@ -146,7 +180,7 @@ describe('McpSettings', () => {
       ],
     })
 
-    render(<McpSettings />)
+    await renderLoadedMcpSettings()
 
     expect(screen.getAllByText('Plugin').length).toBeGreaterThan(0)
     expect(screen.getAllByText('User').length).toBeGreaterThan(0)
@@ -154,7 +188,7 @@ describe('McpSettings', () => {
     expect(screen.getByText('global-user')).toBeInTheDocument()
   })
 
-  it('keeps same-name project MCP servers distinct by project path', () => {
+  it('keeps same-name project MCP servers distinct by project path', async () => {
     useMcpStore.setState({
       servers: [
         {
@@ -192,7 +226,7 @@ describe('McpSettings', () => {
       ],
     })
 
-    render(<McpSettings />)
+    await renderLoadedMcpSettings()
 
     expect(screen.getAllByText('context7')).toHaveLength(2)
     expect(screen.getByText('/workspace/project-a')).toBeInTheDocument()
@@ -226,7 +260,7 @@ describe('McpSettings', () => {
       refreshServerStatus,
     })
 
-    render(<McpSettings />)
+    await renderLoadedMcpSettings()
 
     expect(screen.getByText('Checking')).toBeInTheDocument()
 
@@ -258,7 +292,7 @@ describe('McpSettings', () => {
       deleteServer,
     })
 
-    render(<McpSettings />)
+    await renderLoadedMcpSettings()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open global-user' }))
@@ -302,7 +336,7 @@ describe('McpSettings', () => {
       toggleServer,
     })
 
-    render(<McpSettings />)
+    await renderLoadedMcpSettings()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('switch'))
@@ -332,7 +366,7 @@ describe('McpSettings', () => {
 
     useMcpStore.setState({ createServer })
 
-    render(<McpSettings />)
+    await renderLoadedMcpSettings()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /add server/i }))
@@ -427,7 +461,7 @@ describe('McpSettings', () => {
       updateServer,
     })
 
-    render(<McpSettings />)
+    await renderLoadedMcpSettings()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open shared-tools' }))
@@ -489,7 +523,7 @@ describe('McpSettings', () => {
       reconnectServer,
     })
 
-    render(<McpSettings />)
+    await renderLoadedMcpSettings()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open plugin:telegram:telegram' }))
