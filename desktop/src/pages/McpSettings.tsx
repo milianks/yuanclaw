@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../components/shared/Button'
 import { DirectoryPicker } from '../components/shared/DirectoryPicker'
 import { Input } from '../components/shared/Input'
-import { Modal } from '../components/shared/Modal'
+import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import { useTranslation } from '../i18n'
 import { useUIStore } from '../stores/uiStore'
 import { useMcpStore } from '../stores/mcpStore'
@@ -667,28 +667,20 @@ export function McpSettings() {
   }
 
   const deleteModal = (
-    <Modal
+    <ConfirmDialog
       open={pendingDeleteServer !== null}
       onClose={() => {
         if (isDeleting) return
         setPendingDeleteServer(null)
       }}
       title={t('settings.mcp.form.deleteTitle')}
-      footer={(
-        <>
-          <Button variant="ghost" onClick={() => setPendingDeleteServer(null)} disabled={isDeleting}>
-            {t('settings.mcp.form.cancel')}
-          </Button>
-          <Button variant="danger" onClick={confirmDelete} loading={isDeleting}>
-            {t('settings.mcp.form.confirmDelete')}
-          </Button>
-        </>
-      )}
-    >
-      <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
-        {pendingDeleteServer ? t('settings.mcp.form.deleteConfirmBody', { name: pendingDeleteServer.name }) : ''}
-      </p>
-    </Modal>
+      body={pendingDeleteServer ? t('settings.mcp.form.deleteConfirmBody', { name: pendingDeleteServer.name }) : ''}
+      confirmLabel={t('settings.mcp.form.confirmDelete')}
+      cancelLabel={t('settings.mcp.form.cancel')}
+      confirmVariant="danger"
+      loading={isDeleting}
+      onConfirm={confirmDelete}
+    />
   )
 
   const handleSave = async () => {

@@ -154,6 +154,7 @@ describe('PermissionModeSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /Bypass permissions/ }))
 
+    expect(screen.getByRole('dialog', { name: 'Enable bypass mode' })).toBeInTheDocument()
     expect(screen.getByText('C:\\Users\\LinTan\\MyScript\\test5')).toBeInTheDocument()
     expect(screen.queryByText('C:\\Users\\LinTan')).not.toBeInTheDocument()
   })

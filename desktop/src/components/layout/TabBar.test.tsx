@@ -940,6 +940,7 @@ describe('TabBar', () => {
     fireEvent.click(screen.getByText('Close All'))
 
     expect(screen.getByText('Sessions Running')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Sessions Running' })).toBeInTheDocument()
     expect(screen.getByText('2 sessions still running')).toBeInTheDocument()
     expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['tab-running', 'tab-thinking', 'tab-idle'])
     expect(disconnectSession).not.toHaveBeenCalled()
